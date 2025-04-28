@@ -4,8 +4,7 @@
 
 networks:
   lingarr:
-    
-    external: true
+    driver: bridge
 
 services:
   Lingarr.Server:
@@ -59,22 +58,6 @@ services:
     networks:
       - lingarr
 
-  LibreTranslate:
-    container_name: LibreTranslate
-    image: libretranslate/libretranslate:latest
-    restart: unless-stopped
-    environment:
-      - LT_LOAD_ONLY=en,tr,nl,pt
-      - LT_DISABLE_WEB_UI=false # Optional, enable if you would like to make use of the LibreTranslate web interface 
-    ports:
-      - 5000:5000
-    volumes:
-      - ../media/libretranslate:/home/libretranslate/.local/share/argos-translate
-    networks:
-      - lingarr
-    healthcheck:
-      test: ["CMD-SHELL", "./venv/bin/python scripts/healthcheck.py"]
-
   Lingarr.Mysql:
     image: mariadb:10.5
     container_name: Lingarr.Mysql
@@ -110,32 +93,6 @@ services:
     networks:
       - lingarr
         
-  radarr:
-    image: ghcr.io/hotio/radarr:nightly
-    container_name: radarr
-    environment:
-      - TZ=Europe/Amsterdam
-    volumes:
-      - ../media/data/movies:/movies
-    restart: unless-stopped
-    ports:
-      - 7878:7878
-    networks:
-      - lingarr
-        
-  sonarr:
-    image: ghcr.io/hotio/sonarr:nightly
-    container_name: sonarr
-    environment:
-      - TZ=Europe/Amsterdam
-    volumes:
-      - ../media/data/tv:/tv
-      - ../media/data/series/anime:/anime
-    restart: unless-stopped
-    ports:
-      - 8989:8989
-    networks:
-      - lingarr
         
 #  localai:
 #    container_name: localai

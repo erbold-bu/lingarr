@@ -15,6 +15,7 @@ public class LocalAiService : BaseLanguageService
     private string? _model;
     private string? _endpoint;
     private string? _prompt;
+    private bool _useSubtitleContext;
     private List<KeyValuePair<string, object>>? _localAiParameters;
     private bool _initialized;
     private readonly SemaphoreSlim _initLock = new(1, 1);
@@ -50,7 +51,8 @@ public class LocalAiService : BaseLanguageService
                 SettingKeys.Translation.LocalAi.Endpoint,
                 SettingKeys.Translation.LocalAi.ApiKey,
                 SettingKeys.Translation.LocalAi.LocalAiParameters,
-                SettingKeys.Translation.AiPrompt
+                SettingKeys.Translation.AiPrompt,
+                SettingKeys.Translation.UseSubtitleContext
             ]);
 
             if (string.IsNullOrEmpty(settings[SettingKeys.Translation.LocalAi.Model]) ||
@@ -76,6 +78,8 @@ public class LocalAiService : BaseLanguageService
                 ? settings[SettingKeys.Translation.AiPrompt]
                 : "Translate from {sourceLanguage} to {targetLanguage}, preserving the tone and meaning without censoring the content. Adjust punctuation as needed to make the translation sound natural. Provide only the translated text as output, with no additional comments.";
             _prompt = _prompt.Replace("{sourceLanguage}", sourceLanguage).Replace("{targetLanguage}", targetLanguage);
+            
+            bool.TryParse(settings[SettingKeys.Translation.UseSubtitleContext], out _useSubtitleContext);
 
             _initialized = true;
         }
@@ -157,89 +161,99 @@ public class LocalAiService : BaseLanguageService
     {
         await InitializeAsync(sourceLanguage, targetLanguage);
 
-        if (string.IsNullOrEmpty(_model) || string.IsNullOrEmpty(_endpoint) || string.IsNullOrEmpty(_prompt))
+        if (string.IsNullOrEmpty(_endpoint) || string.IsNullOrEmpty(_model))
         {
-            throw new InvalidOperationException("Local AI service was not properly initialized.");
-        }
-        
-        using var retry = new CancellationTokenSource();
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, retry.Token);
-        var isChatEndpoint = _endpoint.TrimEnd('/').EndsWith("completions", StringComparison.OrdinalIgnoreCase);
-        
-        const int maxRetries = 5;
-        var delay = TimeSpan.FromSeconds(1);
-        var maxDelay = TimeSpan.FromSeconds(32);
-
-        for (var attempt = 1; attempt <= maxRetries; attempt++)
-        {
-            try
-            {
-                return isChatEndpoint 
-                    ? await TranslateWithChatApi(text, retry.Token)
-                    : await TranslateWithGenerateApi(text, retry.Token);
-            }
-            catch (TranslationResponseException ex)
-            {
-                if (attempt == maxRetries)
-                {
-                    _logger.LogError(ex, "Too many requests. Max retries exhausted for text: {Text}", text);
-                    throw new TranslationException("Too many requests. Retry limit reached.", ex);
-                }
-
-                _logger.LogWarning(
-                    "429 Too Many Requests. Retrying in {Delay}... (Attempt {Attempt}/{MaxRetries})",
-                    delay, attempt, maxRetries);
-
-                await Task.Delay(delay, linked.Token);
-                delay = TimeSpan.FromTicks(Math.Min(delay.Ticks * 2, maxDelay.Ticks));
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Unexpected error during translation attempt {Attempt}", attempt);
-                throw new TranslationException("Unexpected error occurred during translation.", ex);
-            }
+            throw new InvalidOperationException("LocalAI service was not properly initialized.");
         }
 
-        throw new TranslationException("Translation failed after maximum retry attempts.");
+        try
+        {
+            HttpResponseMessage? response = null;
+            
+            if (_endpoint.Contains("/v1"))
+            {
+                response = await CallOpenAiApi(text, cancellationToken);
+            }
+            else
+            {
+                response = await CallLlamaApi(text, cancellationToken);
+            }
+            
+            if (response is null)
+            {
+                throw new TranslationException("Failed to get a response from LocalAI");
+            }
+
+            var responseContent = await response.Content.ReadAsStringAsync(cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogError("Error response from LocalAI: {Response}", responseContent);
+                throw new TranslationException("LocalAI returned an error response");
+            }
+
+            string result = ExtractTranslation(responseContent, _endpoint);
+            return result;
+        }
+        catch (Exception ex) when (ex is not TranslationException)
+        {
+            _logger.LogError(ex, "Failed to communicate with LocalAI");
+            throw new TranslationException("Failed to get translation from LocalAI", ex);
+        }
     }
-
-    private async Task<string> TranslateWithGenerateApi(string text, CancellationToken cancellationToken)
+    
+    /// <inheritdoc />
+    public override async Task<string> TranslateAsync(
+        string text,
+        string sourceLanguage,
+        string targetLanguage,
+        IEnumerable<string>? previousLines,
+        IEnumerable<string>? nextLines,
+        CancellationToken cancellationToken)
     {
-        var requestData = new Dictionary<string, object>
-        {
-            ["model"] = _model!,
-            ["prompt"] = _prompt + "\n\n" + text,
-            ["stream"] = false
-        };
-        requestData = AddLocalAiParameters(requestData);
-
-        var content = new StringContent(JsonSerializer.Serialize(requestData), 
-            Encoding.UTF8, "application/json");
-
-        var response = await _httpClient.PostAsync(_endpoint, content, cancellationToken);
-        if (!response.IsSuccessStatusCode)
-        {
-            _logger.LogError("Response Status Code: {StatusCode}", response.StatusCode);
-            _logger.LogError("Response Content: {ResponseContent}", await response.Content.ReadAsStringAsync(cancellationToken));
-            throw new TranslationException("Translation using Local AI failed.");
-        }
-
-        var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
-        var generateResponse = JsonSerializer.Deserialize<GenerateResponse>(responseBody);
+        await InitializeAsync(sourceLanguage, targetLanguage);
         
-        if (generateResponse == null || string.IsNullOrEmpty(generateResponse.Response))
+        if (!_useSubtitleContext || previousLines == null && nextLines == null)
         {
-            throw new TranslationException("Invalid or empty response from generate API.");
+            return await TranslateAsync(text, sourceLanguage, targetLanguage, cancellationToken);
         }
-
-        return generateResponse.Response;
+        
+        string contextualPrompt = _prompt ?? string.Empty;
+        
+        if (previousLines != null && previousLines.Any())
+        {
+            contextualPrompt = contextualPrompt.Replace("{previousLines}", string.Join("\n", previousLines));
+        }
+        else
+        {
+            contextualPrompt = contextualPrompt.Replace("{previousLines}", string.Empty);
+        }
+        
+        if (nextLines != null && nextLines.Any())
+        {
+            contextualPrompt = contextualPrompt.Replace("{nextLines}", string.Join("\n", nextLines));
+        }
+        else
+        {
+            contextualPrompt = contextualPrompt.Replace("{nextLines}", string.Empty);
+        }
+        
+        // Store original prompt
+        string originalPrompt = _prompt ?? string.Empty;
+        
+        try
+        {
+            // Use the contextual prompt temporarily
+            _prompt = contextualPrompt;
+            return await TranslateAsync(text, sourceLanguage, targetLanguage, cancellationToken);
+        }
+        finally
+        {
+            // Restore original prompt
+            _prompt = originalPrompt;
+        }
     }
 
-    private async Task<string> TranslateWithChatApi(string? text, CancellationToken cancellationToken)
+    private async Task<HttpResponseMessage?> CallOpenAiApi(string text, CancellationToken cancellationToken)
     {
         var messages = new[]
         {
@@ -252,28 +266,76 @@ public class LocalAiService : BaseLanguageService
             ["model"] = _model!,
             ["messages"] = messages
         };
-        requestData = AddLocalAiParameters(requestData);
-
-        var content = new StringContent(JsonSerializer.Serialize(requestData),
-            Encoding.UTF8, "application/json");
-
-        var response = await _httpClient.PostAsync(_endpoint, content, cancellationToken);
         
-        if (!response.IsSuccessStatusCode)
+        if (_localAiParameters != null && _localAiParameters.Count > 0)
         {
-            _logger.LogError("Response Status Code: {StatusCode}", response.StatusCode);
-            _logger.LogError("Response Content: {ResponseContent}", await response.Content.ReadAsStringAsync(cancellationToken));
-            throw new TranslationResponseException("Translation using chat API failed.");
+            foreach (var param in _localAiParameters)
+            {
+                requestData[param.Key] = param.Value;
+            }
         }
 
-        var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
-        var chatResponse = JsonSerializer.Deserialize<ChatResponse>(responseBody);
-        
-        if (chatResponse?.Choices == null || chatResponse.Choices.Count == 0)
+        var content = new StringContent(
+            JsonSerializer.Serialize(requestData),
+            Encoding.UTF8,
+            "application/json");
+
+        return await _httpClient.PostAsync($"{_endpoint}/chat/completions", content, cancellationToken);
+    }
+
+    private async Task<HttpResponseMessage?> CallLlamaApi(string text, CancellationToken cancellationToken)
+    {
+        var requestData = new Dictionary<string, object>
         {
-            throw new TranslationResponseException("Invalid or empty response from chat API.");
+            ["model"] = _model!,
+            ["prompt"] = $"{_prompt}\n\n{text}",
+            ["stream"] = false
+        };
+        
+        if (_localAiParameters != null && _localAiParameters.Count > 0)
+        {
+            foreach (var param in _localAiParameters)
+            {
+                requestData[param.Key] = param.Value;
+            }
         }
 
-        return chatResponse.Choices[0].Message.Content;
+        var content = new StringContent(
+            JsonSerializer.Serialize(requestData),
+            Encoding.UTF8,
+            "application/json");
+
+        return await _httpClient.PostAsync(_endpoint, content, cancellationToken);
+    }
+
+    private string ExtractTranslation(string responseContent, string endpoint)
+    {
+        try
+        {
+            var jsonResponse = JsonSerializer.Deserialize<JsonElement>(responseContent);
+            
+            if (endpoint.Contains("/v1"))
+            {
+                // OpenAI format
+                return jsonResponse.GetProperty("choices")[0]
+                    .GetProperty("message")
+                    .GetProperty("content")
+                    .GetString() ?? string.Empty;
+            }
+            else
+            {
+                // Llama format
+                return jsonResponse.TryGetProperty("response", out var response)
+                    ? response.GetString() ?? string.Empty
+                    : jsonResponse.TryGetProperty("content", out var content)
+                        ? content.GetString() ?? string.Empty
+                        : string.Empty;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to extract translation from response: {Response}", responseContent);
+            return string.Empty;
+        }
     }
 }

@@ -9,6 +9,7 @@ namespace Lingarr.Server.Services;
 public class SubtitleTranslationService
 {
     private const int MaxLineLength = 42;
+    private const int ContextLineCount = 3; // Number of previous and next lines to include for context
     private int _lastProgression = -1;
     private readonly ITranslationService _translationService;
     private readonly IProgressService? _progressService;
@@ -46,20 +47,42 @@ public class SubtitleTranslationService
         int iteration = 0;
         int totalSubtitles = subtitles.Count;
 
-        foreach (var subtitle in subtitles)
+        for (int i = 0; i < subtitles.Count; i++)
         {
             if (cancellationToken.IsCancellationRequested)
             {
-                _lastProgression =  -1;
+                _lastProgression = -1;
                 break;
             }
-                
+            
+            var subtitle = subtitles[i];
             var subtitleLine = string.Join(" ", stripSubtitleFormatting ? subtitle.PlaintextLines : subtitle.Lines);
+            
+            // Get previous lines for context
+            var previousLines = new List<string>();
+            for (int prev = Math.Max(0, i - ContextLineCount); prev < i; prev++)
+            {
+                var prevSubtitle = subtitles[prev];
+                var prevLine = string.Join(" ", stripSubtitleFormatting ? prevSubtitle.PlaintextLines : prevSubtitle.Lines);
+                previousLines.Add(prevLine);
+            }
+            
+            // Get next lines for context
+            var nextLines = new List<string>();
+            for (int next = i + 1; next < Math.Min(subtitles.Count, i + 1 + ContextLineCount); next++)
+            {
+                var nextSubtitle = subtitles[next];
+                var nextLine = string.Join(" ", stripSubtitleFormatting ? nextSubtitle.PlaintextLines : nextSubtitle.Lines);
+                nextLines.Add(nextLine);
+            }
+            
             var translated = await TranslateSubtitleLine(new TranslateAbleSubtitleLine
             {
                 SubtitleLine = subtitleLine,
                 SourceLanguage = translationRequest.SourceLanguage,
-                TargetLanguage = translationRequest.TargetLanguage
+                TargetLanguage = translationRequest.TargetLanguage,
+                PreviousLines = previousLines,
+                NextLines = nextLines
             },
             cancellationToken);
             
@@ -126,6 +149,8 @@ public class SubtitleTranslationService
                 translateAbleSubtitle.SubtitleLine,
                 translateAbleSubtitle.SourceLanguage,
                 translateAbleSubtitle.TargetLanguage,
+                translateAbleSubtitle.PreviousLines,
+                translateAbleSubtitle.NextLines,
                 cancellationToken);
         }
         catch (TranslationException ex)

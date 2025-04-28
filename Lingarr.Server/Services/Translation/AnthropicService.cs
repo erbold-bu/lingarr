@@ -151,4 +151,9 @@ public class AnthropicService : BaseLanguageService
 
         throw new TranslationException("Translation failed after maximum retry attempts.");
     }
+
+    public override Task<string> TranslateAsync(string text, string sourceLanguage, string targetLanguage, IEnumerable<string>? previousLines, IEnumerable<string>? nextLines, CancellationToken cancellationToken)
+    {
+        throw new NotImplementedException();
+    }
 }

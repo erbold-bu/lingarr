@@ -17,6 +17,7 @@ public class GoogleGeminiService : BaseLanguageService
     private string? _model;
     private string? _apiKey;
     private string? _prompt;
+    private bool _useSubtitleContext;
     private bool _initialized;
     private readonly SemaphoreSlim _initLock = new(1, 1);
 
@@ -49,7 +50,8 @@ public class GoogleGeminiService : BaseLanguageService
             var settings = await _settings.GetSettings([
                 SettingKeys.Translation.Gemini.Model,
                 SettingKeys.Translation.Gemini.ApiKey,
-                SettingKeys.Translation.AiPrompt
+                SettingKeys.Translation.AiPrompt,
+                SettingKeys.Translation.UseSubtitleContext
             ]);
 
             if (string.IsNullOrEmpty(settings[SettingKeys.Translation.Gemini.ApiKey]))
@@ -67,6 +69,8 @@ public class GoogleGeminiService : BaseLanguageService
                 ? settings[SettingKeys.Translation.AiPrompt]
                 : "Translate from {sourceLanguage} to {targetLanguage}, preserving the tone and meaning without censoring the content. Adjust punctuation as needed to make the translation sound natural. Provide only the translated text as output, with no additional comments.";
             _prompt = _prompt.Replace("{sourceLanguage}", sourceLanguage).Replace("{targetLanguage}", targetLanguage);
+            
+            _useSubtitleContext = true;
 
             _initialized = true;
         }
@@ -130,6 +134,58 @@ public class GoogleGeminiService : BaseLanguageService
         }
 
         throw new TranslationException("Translation failed after maximum retry attempts.");
+    }
+    
+    /// <inheritdoc />
+    public override async Task<string> TranslateAsync(
+        string message,
+        string sourceLanguage,
+        string targetLanguage,
+        IEnumerable<string>? previousLines,
+        IEnumerable<string>? nextLines,
+        CancellationToken cancellationToken)
+    {
+        await InitializeAsync(sourceLanguage, targetLanguage);
+        
+        if (!_useSubtitleContext || previousLines == null && nextLines == null)
+        {
+            return await TranslateAsync(message, sourceLanguage, targetLanguage, cancellationToken);
+        }
+        
+        string contextualPrompt = _prompt ?? string.Empty;
+        
+        if (previousLines != null && previousLines.Any())
+        {
+            contextualPrompt = contextualPrompt.Replace("{previousLines}", string.Join("\n", previousLines));
+        }
+        else
+        {
+            contextualPrompt = contextualPrompt.Replace("{previousLines}", string.Empty);
+        }
+        
+        if (nextLines != null && nextLines.Any())
+        {
+            contextualPrompt = contextualPrompt.Replace("{nextLines}", string.Join("\n", nextLines));
+        }
+        else
+        {
+            contextualPrompt = contextualPrompt.Replace("{nextLines}", string.Empty);
+        }
+        
+        // Store original prompt
+        string originalPrompt = _prompt ?? string.Empty;
+        
+        try
+        {
+            // Use the contextual prompt temporarily
+            _prompt = contextualPrompt;
+            return await TranslateAsync(message, sourceLanguage, targetLanguage, cancellationToken);
+        }
+        finally
+        {
+            // Restore original prompt
+            _prompt = originalPrompt;
+        }
     }
 
     private async Task<string> TranslateWithGeminiApi(string? message, CancellationToken cancellationToken)

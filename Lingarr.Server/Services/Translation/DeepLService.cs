@@ -128,6 +128,19 @@ public class DeepLService : BaseTranslationService
         }
     }
 
+    /// <inheritdoc />
+    public override async Task<string> TranslateAsync(
+        string text,
+        string sourceLanguage,
+        string targetLanguage,
+        IEnumerable<string>? previousLines,
+        IEnumerable<string>? nextLines,
+        CancellationToken cancellationToken)
+    {
+        // DeepL API doesn't support context for translations, so we just call the regular method
+        return await TranslateAsync(text, sourceLanguage, targetLanguage, cancellationToken);
+    }
+
     /// <summary>
     /// Retrieves the list of available target languages from DeepL, using caching to optimize performance.
     /// </summary>
