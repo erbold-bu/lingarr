@@ -30,12 +30,10 @@ services:
       - SOURCE_LANGUAGES=[{"name":"English","code":"en"},{"name":"Dutch","code":"nl"}]
       - TARGET_LANGUAGES=[{"name":"Turkish","code":"tr"},{"name":"Dutch","code":"nl"}]
     volumes:
-      - ../media/data/movies:/movies
-      - ../media/data/tv:/tv
-      - ../media/data/series/anime:/anime
+      - /home/erbold/mnt/Films:/data/Films
       - ../media/data/config:/app/config
     ports:
-      - "9877:8080"
+      - "9890:8080"
     networks:
       - lingarr
     depends_on:
@@ -49,7 +47,7 @@ services:
       context: ./Lingarr.Client/
       dockerfile: Dockerfile
     ports:
-      - "9876:9876"
+      - "9879:9876"
     volumes:
       - ./Lingarr.Client:/app:rw
       - ./Lingarr.Client/node_modules:/app/node_modules

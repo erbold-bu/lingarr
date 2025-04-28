@@ -55,7 +55,7 @@ public class TranslationJob
     {
         var jobName = JobContextFilter.GetCurrentJobTypeName();
         var jobId = JobContextFilter.GetCurrentJobId();
-        
+
         try
         {
             await _scheduleService.UpdateJobState(jobName, JobStatus.Processing.GetDisplayName());
@@ -73,18 +73,18 @@ public class TranslationJob
                 SettingKeys.Translation.StripSubtitleFormatting,
             ]);
             var serviceType = settings[SettingKeys.Translation.ServiceType];
-            var stripSubtitleFormatting =  settings[SettingKeys.Translation.StripSubtitleFormatting] == "true";
-            
+            var stripSubtitleFormatting = settings[SettingKeys.Translation.StripSubtitleFormatting] == "true";
+
             var translationService = _translationServiceFactory.CreateTranslationService(serviceType);
             var translator = new SubtitleTranslationService(translationService, _logger, _progressService);
             var subtitles = await _subtitleService.ReadSubtitles(request.SubtitleToTranslate);
             var translatedSubtitles = await translator.TranslateSubtitles(
-                subtitles, 
-                request, 
+                subtitles,
+                request,
                 stripSubtitleFormatting,
                 cancellationToken
             );
-            
+
             if (settings[SettingKeys.Translation.FixOverlappingSubtitles] == "true")
             {
                 translatedSubtitles = _subtitleService.FixOverlappingSubtitles(translatedSubtitles);
@@ -115,20 +115,27 @@ public class TranslationJob
             await _scheduleService.UpdateJobState(jobName, JobStatus.Failed.GetDisplayName());
         }
     }
-    
-    private async Task WriteSubtitles( 
-        TranslationRequest translationRequest, 
-        List<SubtitleItem> translatedSubtitles, 
+
+    private async Task WriteSubtitles(
+        TranslationRequest translationRequest,
+        List<SubtitleItem> translatedSubtitles,
         bool stripSubtitleFormatting)
-    
+
     {
         try
         {
             var outputPath = _subtitleService.CreateFilePath(
                 translationRequest.SubtitleToTranslate,
                 translationRequest.TargetLanguage);
+
+            // if file exists, delete it
+            if (File.Exists(outputPath))
+            {
+                File.Delete(outputPath);
+            }
+
             await _subtitleService.WriteSubtitles(outputPath, translatedSubtitles, stripSubtitleFormatting);
-            
+
             _logger.LogInformation("TranslateJob completed and created subtitle: |Green|{filePath}|/Green|",
                 outputPath);
         }
@@ -140,8 +147,8 @@ public class TranslationJob
     }
 
     private async Task HandleCompletion(
-        string jobName, 
-        TranslationRequest translationRequest, 
+        string jobName,
+        TranslationRequest translationRequest,
         CancellationToken cancellationToken)
     {
         translationRequest.CompletedAt = DateTime.UtcNow;
@@ -150,7 +157,7 @@ public class TranslationJob
         await _progressService.Emit(translationRequest, 100);
         await _scheduleService.UpdateJobState(jobName, JobStatus.Succeeded.GetDisplayName());
     }
-    
+
     private async Task HandleCancellation(string jobName, TranslationRequest request)
     {
         _logger.LogInformation("Translation cancelled for subtitle: |Orange|{subtitlePath}|/Orange|",

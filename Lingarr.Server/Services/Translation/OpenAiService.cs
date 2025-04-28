@@ -53,7 +53,7 @@ public class OpenAiService : BaseLanguageService
 
             _prompt = !string.IsNullOrEmpty(settings[SettingKeys.Translation.AiPrompt])
                 ? settings[SettingKeys.Translation.AiPrompt]
-                : "Translate from {sourceLanguage} to {targetLanguage}, preserving the tone and meaning without censoring the content. Adjust punctuation as needed to make the translation sound natural. Provide only the translated text as output, with no additional comments.";
+                : "Translate the input you received from {sourceLanguage} to {targetLanguage}, preserving the tone and meaning without censoring the content. Adjust punctuation as needed to make the translation sound natural. Provide only the translated text as output, with no additional comments. Do not send an empty response. Respect the previous and next lines as your translation context as well, but do not include previous and next lines for context in your translation for what you receive as a translation input.\n\nPrevious lines for context:\n{previousLines}\n\nNext lines for context:\n{nextLines}";
             _prompt = _prompt.Replace("{sourceLanguage}", sourceLanguage).Replace("{targetLanguage}", targetLanguage);
             
             _useSubtitleContext = true;
@@ -87,20 +87,30 @@ public class OpenAiService : BaseLanguageService
 
         try
         {
-            var messages = new List<ChatMessage>
-            {
-                new SystemChatMessage(_prompt),
-                new UserChatMessage(text)
-            };
-
-            ChatCompletion completion = await _client.CompleteChatAsync(messages, cancellationToken: cancellationToken);
-            return completion.Content[0].Text;
+            return await TranslateWithOpenAiAsync(text, _prompt, cancellationToken);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error occurred during OpenAI translation");
             throw new TranslationException("Failed to translate using OpenAI", ex);
         }
+    }
+    
+    private async Task<string> TranslateWithOpenAiAsync(string text, string prompt, CancellationToken cancellationToken)
+    {
+        if (_client == null)
+        {
+            throw new InvalidOperationException("OpenAI service was not properly initialized.");
+        }
+
+        var messages = new List<ChatMessage>
+        {
+            new SystemChatMessage(prompt),
+            new UserChatMessage(text)
+        };
+
+        ChatCompletion completion = await _client.CompleteChatAsync(messages, cancellationToken: cancellationToken);
+        return completion.Content[0].Text;
     }
     
     /// <inheritdoc />
@@ -139,19 +149,15 @@ public class OpenAiService : BaseLanguageService
             contextualPrompt = contextualPrompt.Replace("{nextLines}", string.Empty);
         }
         
-        // Store original prompt
-        string originalPrompt = _prompt ?? string.Empty;
-        
         try
         {
-            // Use the contextual prompt temporarily
-            _prompt = contextualPrompt;
-            return await TranslateAsync(text, sourceLanguage, targetLanguage, cancellationToken);
+            // Use the contextual prompt directly
+            return await TranslateWithOpenAiAsync(text, contextualPrompt, cancellationToken);
         }
-        finally
+        catch (Exception)
         {
-            // Restore original prompt
-            _prompt = originalPrompt;
+            // If contextual translation fails, fall back to regular translation
+            return await TranslateAsync(text, sourceLanguage, targetLanguage, cancellationToken);
         }
     }
 }

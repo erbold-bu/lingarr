@@ -67,7 +67,7 @@ public class GoogleGeminiService : BaseLanguageService
 
             _prompt = !string.IsNullOrEmpty(settings[SettingKeys.Translation.AiPrompt])
                 ? settings[SettingKeys.Translation.AiPrompt]
-                : "Translate from {sourceLanguage} to {targetLanguage}, preserving the tone and meaning without censoring the content. Adjust punctuation as needed to make the translation sound natural. Provide only the translated text as output, with no additional comments.";
+                : "Translate the input you received from {sourceLanguage} to {targetLanguage}, preserving the tone and meaning without censoring the content. Adjust punctuation as needed to make the translation sound natural. Provide only the translated text as output, with no additional comments. Do not send an empty response. Respect the previous and next lines as your translation context as well, but do not include previous and next lines for context in your translation for what you receive as a translation input.\n\nPrevious lines for context:\n{previousLines}\n\nNext lines for context:\n{nextLines}";
             _prompt = _prompt.Replace("{sourceLanguage}", sourceLanguage).Replace("{targetLanguage}", targetLanguage);
             
             _useSubtitleContext = true;
@@ -105,7 +105,7 @@ public class GoogleGeminiService : BaseLanguageService
         {
             try
             {
-                return await TranslateWithGeminiApi(message, linked.Token);
+                return await TranslateWithGeminiApi(message, _prompt, linked.Token);
             }
             catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.TooManyRequests)
             {
@@ -172,47 +172,88 @@ public class GoogleGeminiService : BaseLanguageService
             contextualPrompt = contextualPrompt.Replace("{nextLines}", string.Empty);
         }
         
-        // Store original prompt
-        string originalPrompt = _prompt ?? string.Empty;
-        
+        // Use the contextual prompt temporarily
         try
         {
-            // Use the contextual prompt temporarily
-            _prompt = contextualPrompt;
-            return await TranslateAsync(message, sourceLanguage, targetLanguage, cancellationToken);
+            return await TranslateWithGeminiApi(message, contextualPrompt, cancellationToken);
         }
-        finally
+        catch (Exception)
         {
-            // Restore original prompt
-            _prompt = originalPrompt;
+            // If contextual translation fails, fall back to regular translation
+            return await TranslateAsync(message, sourceLanguage, targetLanguage, cancellationToken);
         }
     }
 
-    private async Task<string> TranslateWithGeminiApi(string? message, CancellationToken cancellationToken)
+    private async Task<string> TranslateWithGeminiApi(string? message, string prompt, CancellationToken cancellationToken)
     {
         var endpoint = $"{_endpoint}/models/{_model}:generateContent?key={_apiKey}";
 
-        var request = new
+        object request;
+        if (_model == "gemini-2.5-flash-preview-04-17") 
         {
-            contents = new[]
+            request = new
             {
-                new
+                system_instruction = new
                 {
-                    role = "user",
                     parts = new[]
                     {
                         new
                         {
-                            text = _prompt
-                        },
+                            text = prompt
+                        }
+                    }
+                },
+                contents = new[]
+                {
+                    new
+                    {
+                        parts = new[]
+                        {
+                            new
+                            {
+                                text = message
+                            }
+                        }
+                    }
+                },
+                generationConfig = new
+                {
+                    thinkingConfig = new
+                    {
+                        thinkingBudget = 0
+                    }
+                }
+            };
+        }
+        else
+        {
+            request = new
+            {
+                system_instruction = new
+                {
+                    parts = new[]
+                    {
                         new
                         {
-                            text = message
+                            text = prompt
+                        }
+                    }
+                },
+                contents = new[]
+                {
+                    new
+                    {
+                        parts = new[]
+                        {
+                            new
+                            {
+                                text = message
+                            }
                         }
                     }
                 }
-            }
-        };
+            };
+        }
 
         var content = new StringContent(
             JsonSerializer.Serialize(request),
@@ -220,6 +261,10 @@ public class GoogleGeminiService : BaseLanguageService
             "application/json");
 
         var response = await _httpClient.PostAsync(endpoint, content, cancellationToken);
+
+        // let console log curl command
+        // Console.WriteLine($"curl -X POST {endpoint} -H \"Content-Type: application/json\" -d '{JsonSerializer.Serialize(request)}'");
+        
         
         if (!response.IsSuccessStatusCode)
         {
@@ -230,6 +275,7 @@ public class GoogleGeminiService : BaseLanguageService
         }
 
         var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
+        // Console.WriteLine($"Response body: {responseBody}");
         var geminiResponse = JsonSerializer.Deserialize<GeminiResponse>(responseBody);
         
         if (geminiResponse?.Candidates == null || geminiResponse.Candidates.Count == 0 ||
