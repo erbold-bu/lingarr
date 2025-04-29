@@ -85,7 +85,10 @@
     "currentVersion": "Version: {version} beta",
     "enabled": "Enabled",
     "disabled": "Disabled",
-    "saved": "saved"
+    "saved": "saved",
+    "cancel": "Cancel",
+    "sortByTitle": "Sort by title",
+    "sortByAdded": "Sort by date added"
   },
   "settings": {
     "integrations": {
@@ -107,7 +110,7 @@
       "description": "Configure the translation service for subtitle localization.",
       "serviceSelect": "Select translation service:",
       "aIPromptLabel": "Prompt",
-      "aIPromptDescription": "The prompt is used to start a translation with an AI model. Note that extensive prompts cost more, while simple prompts may lead to more hallucinations.",
+      "aIPromptDescription": "The prompt is used to start a translation with an AI model. Note that extensive prompts cost more, while simple prompts may lead to more hallucinations. Available: {sourceLanguage} {targetLanguage} {previousLines} {nextLines}",
       "anthropicEnabled": "Enabled",
       "anthropicDisabled": "Disabled",
       "anthropicWarningIntro": "Automation is:",
@@ -209,5 +212,22 @@
       "remove": "Remove Parameter",
       "addParameter": "Add Parameter"
     }
+  },
+  "subtitles": {
+    "uploadTitle": "Upload Subtitle",
+    "language": "Language",
+    "selectLanguage": "Select a language",
+    "subtitleFile": "Subtitle File",
+    "fileTypes": "Supported formats: .srt, .ssa, .ass",
+    "upload": "Upload",
+    "uploading": "Uploading...",
+    "downloadSuccess": "Subtitle downloaded successfully",
+    "uploadSuccess": "Subtitle uploaded successfully"
+  },
+  "errors": {
+    "loadLanguages": "Failed to load languages",
+    "missingFields": "Please fill in all required fields",
+    "missingMediaPath": "Media path not found",
+    "uploadFailed": "Failed to upload subtitle"
   }
 }

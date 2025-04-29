@@ -53,6 +53,13 @@
                                     </span>
                                 </BadgeComponent>
                             </ContextMenu>
+                            
+                            <!-- Upload Button -->
+                            <button 
+                                class="border-accent bg-primary text-primary-content rounded-md border p-1 text-xs hover:brightness-150"
+                                @click.stop.prevent="openUploadDialog(item)">
+                                <span class="px-1">+</span>
+                            </button>
                         </div>
                         <div class="col-span-1 flex flex-wrap items-center gap-2 px-4 py-2">
                             <ToggleButton
@@ -88,11 +95,21 @@
                 :page-size="movies.pageSize" />
         </div>
         <NoMediaNotification v-else />
+        
+        <!-- Upload Subtitle Dialog -->
+        <UploadSubtitleDialog 
+            v-if="selectedMovie"
+            :is-open="isUploadDialogOpen"
+            :media="selectedMovie"
+            :media-type="MEDIA_TYPE.MOVIE"
+            @close="isUploadDialogOpen = false"
+            @uploaded="handleUploadSuccess"
+        />
     </PageLayout>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ComputedRef } from 'vue'
+import { computed, onMounted, ComputedRef, ref } from 'vue'
 import { IFilter, IMovie, IPagedResult, MEDIA_TYPE, SETTINGS } from '@/ts'
 import useDebounce from '@/composables/useDebounce'
 import { useMovieStore } from '@/store/movie'
@@ -108,6 +125,7 @@ import ReloadComponent from '@/components/common/ReloadComponent.vue'
 import NoMediaNotification from '@/components/common/NoMediaNotification.vue'
 import ToggleButton from '@/components/common/ToggleButton.vue'
 import InputComponent from '@/components/common/InputComponent.vue'
+import UploadSubtitleDialog from '@/components/common/UploadSubtitleDialog.vue'
 
 const movieStore = useMovieStore()
 const settingStore = useSettingStore()
@@ -127,6 +145,24 @@ const filter: ComputedRef<IFilter> = computed({
 const toggleMovie = useDebounce(async (movie: IMovie) => {
     instanceStore.setPoster({ content: movie, type: 'movie' })
 }, 1000)
+
+// For upload dialog
+const isUploadDialogOpen = ref(false)
+const selectedMovie = ref<IMovie | null>(null)
+
+function openUploadDialog(movie: IMovie) {
+    console.log('Opening upload dialog for movie:', movie)
+    selectedMovie.value = movie
+    setTimeout(() => {
+        isUploadDialogOpen.value = true
+    }, 100)
+}
+
+function handleUploadSuccess() {
+    isUploadDialogOpen.value = false
+    // Refresh the movie list
+    movieStore.fetch()
+}
 
 onMounted(async () => {
     await movieStore.fetch()
