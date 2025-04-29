@@ -69,7 +69,7 @@ public class GoogleGeminiService : BaseLanguageService
                 ? settings[SettingKeys.Translation.AiPrompt]
                 : "Translate the input you received from {sourceLanguage} to {targetLanguage}, preserving the tone and meaning without censoring the content. Adjust punctuation as needed to make the translation sound natural. Provide only the translated text as output, with no additional comments. Do not send an empty response. Respect the previous and next lines as your translation context as well, but do not include previous and next lines for context in your translation for what you receive as a translation input.\n\nPrevious lines for context:\n{previousLines}\n\nNext lines for context:\n{nextLines}";
             _prompt = _prompt.Replace("{sourceLanguage}", sourceLanguage).Replace("{targetLanguage}", targetLanguage);
-            
+
             _useSubtitleContext = true;
 
             _initialized = true;
@@ -135,7 +135,7 @@ public class GoogleGeminiService : BaseLanguageService
 
         throw new TranslationException("Translation failed after maximum retry attempts.");
     }
-    
+
     /// <inheritdoc />
     public override async Task<string> TranslateAsync(
         string message,
@@ -146,14 +146,14 @@ public class GoogleGeminiService : BaseLanguageService
         CancellationToken cancellationToken)
     {
         await InitializeAsync(sourceLanguage, targetLanguage);
-        
+
         if (!_useSubtitleContext || previousLines == null && nextLines == null)
         {
             return await TranslateAsync(message, sourceLanguage, targetLanguage, cancellationToken);
         }
-        
+
         string contextualPrompt = _prompt ?? string.Empty;
-        
+
         if (previousLines != null && previousLines.Any())
         {
             contextualPrompt = contextualPrompt.Replace("{previousLines}", string.Join("\n", previousLines));
@@ -162,7 +162,7 @@ public class GoogleGeminiService : BaseLanguageService
         {
             contextualPrompt = contextualPrompt.Replace("{previousLines}", string.Empty);
         }
-        
+
         if (nextLines != null && nextLines.Any())
         {
             contextualPrompt = contextualPrompt.Replace("{nextLines}", string.Join("\n", nextLines));
@@ -171,7 +171,7 @@ public class GoogleGeminiService : BaseLanguageService
         {
             contextualPrompt = contextualPrompt.Replace("{nextLines}", string.Empty);
         }
-        
+
         // Use the contextual prompt temporarily
         try
         {
@@ -186,25 +186,66 @@ public class GoogleGeminiService : BaseLanguageService
 
     private async Task<string> TranslateWithGeminiApi(string? message, string prompt, CancellationToken cancellationToken)
     {
-        var endpoint = $"{_endpoint}/models/{_model}:generateContent?key={_apiKey}";
-
         object request;
-        if (!_model.StartsWith("gemini-2.0") && !_model.StartsWith("gemini-1.5")) 
+        var translationModel = _model;
+        if (!_model.StartsWith("gemini-2.0") && !_model.StartsWith("gemini-1.5"))
         {
-            request = new
+            var withThinking = _model.Contains("-with-thinking");
+            if (withThinking)
             {
-                system_instruction = new
+                // -with-thinking can have budget arbitery number, so we need to get it from the model optionally
+                var budget = _model.Split('-').Last();
+                int.TryParse(budget, out var budgetInt);
+
+                budgetInt = budgetInt > 0 ? budgetInt : 0;
+
+                // let's strip the -with-thinking from the model with it's budget
+                translationModel = _model.Replace($"-with-thinking-{budget}", "").Replace("-with-thinking", "");
+                if (budgetInt == 0)
                 {
-                    parts = new[]
+                    request = new
                     {
+                        system_instruction = new
+                        {
+                            parts = new[]
+                   {
                         new
                         {
                             text = prompt
                         }
                     }
-                },
-                contents = new[]
+                        },
+                        contents = new[]
+               {
+                    new
+                    {
+                        parts = new[]
+                        {
+                            new
+                            {
+                                text = message
+                            }
+                        }
+                    }
+                }
+                    };
+                }
+                else
                 {
+                    request = new
+                    {
+                        system_instruction = new
+                        {
+                            parts = new[]
+                  {
+                        new
+                        {
+                            text = prompt
+                        }
+                    }
+                        },
+                        contents = new[]
+              {
                     new
                     {
                         parts = new[]
@@ -216,14 +257,52 @@ public class GoogleGeminiService : BaseLanguageService
                         }
                     }
                 },
-                generationConfig = new
-                {
-                    thinkingConfig = new
-                    {
-                        thinkingBudget = 0
-                    }
+                        generationConfig = new
+                        {
+                            thinkingConfig = new
+                            {
+                                thinkingBudget = budgetInt
+                            }
+                        }
+                    };
                 }
-            };
+            }
+            else
+            {
+                request = new
+                {
+                    system_instruction = new
+                    {
+                        parts = new[]
+                   {
+                        new
+                        {
+                            text = prompt
+                        }
+                    }
+                    },
+                    contents = new[]
+               {
+                    new
+                    {
+                        parts = new[]
+                        {
+                            new
+                            {
+                                text = message
+                            }
+                        }
+                    }
+                },
+                    generationConfig = new
+                    {
+                        thinkingConfig = new
+                        {
+                            thinkingBudget = 0
+                        }
+                    }
+                };
+            }
         }
         else
         {
@@ -255,21 +334,22 @@ public class GoogleGeminiService : BaseLanguageService
             };
         }
 
+        var endpoint = $"{_endpoint}/models/{translationModel}:generateContent?key={_apiKey}";
+
         var content = new StringContent(
             JsonSerializer.Serialize(request),
             Encoding.UTF8,
             "application/json");
 
+        // let console log curl command
+        Console.WriteLine($"curl -X POST {endpoint} -H \"Content-Type: application/json\" -d '{JsonSerializer.Serialize(request)}'");
+
         var response = await _httpClient.PostAsync(endpoint, content, cancellationToken);
 
-        // let console log curl command
-        // Console.WriteLine($"curl -X POST {endpoint} -H \"Content-Type: application/json\" -d '{JsonSerializer.Serialize(request)}'");
-        
-        
         if (!response.IsSuccessStatusCode)
         {
             _logger.LogError("Response Status Code: {StatusCode}", response.StatusCode);
-            _logger.LogError("Response Content: {ResponseContent}", 
+            _logger.LogError("Response Content: {ResponseContent}",
                 await response.Content.ReadAsStringAsync(cancellationToken));
             throw new TranslationException("Translation using Gemini API failed.");
         }
@@ -277,9 +357,9 @@ public class GoogleGeminiService : BaseLanguageService
         var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
         // Console.WriteLine($"Response body: {responseBody}");
         var geminiResponse = JsonSerializer.Deserialize<GeminiResponse>(responseBody);
-        
+
         if (geminiResponse?.Candidates == null || geminiResponse.Candidates.Count == 0 ||
-            geminiResponse.Candidates[0].Content?.Parts == null || 
+            geminiResponse.Candidates[0].Content?.Parts == null ||
             geminiResponse.Candidates[0].Content?.Parts.Count == 0)
         {
             throw new TranslationException("Invalid or empty response from Gemini API.");

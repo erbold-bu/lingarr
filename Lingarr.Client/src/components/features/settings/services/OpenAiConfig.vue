@@ -15,7 +15,7 @@
         </p>
 
         <label class="mb-1 block text-sm">
-            {{ translate('settings.services.openAiAiModel') }}
+            {{ translate('settings.services.openAiAiModel') }}: {{ modelSelection }}
         </label>
         <SelectComponent v-model:selected="modelSelection" :options="options" />
 

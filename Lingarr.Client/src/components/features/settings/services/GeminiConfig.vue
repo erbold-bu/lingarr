@@ -15,7 +15,7 @@
         </p>
 
         <label class="mb-1 block text-sm">
-            {{ translate('settings.services.geminiAiModel') }}
+            {{ translate('settings.services.geminiAiModel') }}: {{ modelSelection }}
         </label>
         <SelectComponent v-model:selected="modelSelection" :options="options" />
 
@@ -54,7 +54,9 @@ const CUSTOM_MODEL_VALUE = 'custom'
 
 const options = [
     { label: 'Gemini 2.5 Pro Preview (without thinking)', value: 'gemini-2.5-pro-preview-03-25' },
+    { label: 'Gemini 2.5 Pro Preview (with thinking)', value: 'gemini-2.5-pro-preview-03-25-with-thinking' },
     { label: 'Gemini 2.5 Flash Preview (without thinking)', value: 'gemini-2.5-flash-preview-04-17' },
+    { label: 'Gemini 2.5 Flash Preview (with thinking)', value: 'gemini-2.5-flash-preview-04-17-with-thinking' },
     { label: 'Gemini 2.0 Flash', value: 'gemini-2.0-flash' },
     { label: 'Gemini 2.0 Flash Lite', value: 'gemini-2.0-flash-lite-preview-02-05' },
     { label: 'Gemini 1.5 Flash', value: 'gemini-1.5-flash' },
