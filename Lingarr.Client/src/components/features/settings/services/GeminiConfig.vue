@@ -53,6 +53,7 @@ import AiPromptConfig from '@/components/features/settings/services/AiPromptConf
 const CUSTOM_MODEL_VALUE = 'custom'
 
 const options = [
+    { label: 'Gemini 2.5 Pro Preview (without thinking)', value: 'gemini-2.5-pro-preview-03-25' },
     { label: 'Gemini 2.5 Flash Preview (without thinking)', value: 'gemini-2.5-flash-preview-04-17' },
     { label: 'Gemini 2.0 Flash', value: 'gemini-2.0-flash' },
     { label: 'Gemini 2.0 Flash Lite', value: 'gemini-2.0-flash-lite-preview-02-05' },

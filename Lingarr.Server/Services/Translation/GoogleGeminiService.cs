@@ -189,7 +189,7 @@ public class GoogleGeminiService : BaseLanguageService
         var endpoint = $"{_endpoint}/models/{_model}:generateContent?key={_apiKey}";
 
         object request;
-        if (_model == "gemini-2.5-flash-preview-04-17") 
+        if (!_model.StartsWith("gemini-2.0") && !_model.StartsWith("gemini-1.5")) 
         {
             request = new
             {
