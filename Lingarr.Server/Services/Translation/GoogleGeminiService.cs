@@ -17,6 +17,7 @@ public class GoogleGeminiService : BaseLanguageService
     private string? _model;
     private string? _apiKey;
     private string? _prompt;
+    private bool _useSubtitleContext;
     private bool _initialized;
     private readonly SemaphoreSlim _initLock = new(1, 1);
 
@@ -49,7 +50,8 @@ public class GoogleGeminiService : BaseLanguageService
             var settings = await _settings.GetSettings([
                 SettingKeys.Translation.Gemini.Model,
                 SettingKeys.Translation.Gemini.ApiKey,
-                SettingKeys.Translation.AiPrompt
+                SettingKeys.Translation.AiPrompt,
+                SettingKeys.Translation.UseSubtitleContext
             ]);
 
             if (string.IsNullOrEmpty(settings[SettingKeys.Translation.Gemini.ApiKey]))
@@ -65,8 +67,10 @@ public class GoogleGeminiService : BaseLanguageService
 
             _prompt = !string.IsNullOrEmpty(settings[SettingKeys.Translation.AiPrompt])
                 ? settings[SettingKeys.Translation.AiPrompt]
-                : "Translate from {sourceLanguage} to {targetLanguage}, preserving the tone and meaning without censoring the content. Adjust punctuation as needed to make the translation sound natural. Provide only the translated text as output, with no additional comments.";
+                : "Translate the input you received from {sourceLanguage} to {targetLanguage}, preserving the tone and meaning without censoring the content. Adjust punctuation as needed to make the translation sound natural. Provide only the translated text as output, with no additional comments. Do not send an empty response. Respect the previous and next lines as your translation context as well, but do not include previous and next lines for context in your translation for what you receive as a translation input.\n\nPrevious lines for context:\n{previousLines}\n\nNext lines for context:\n{nextLines}";
             _prompt = _prompt.Replace("{sourceLanguage}", sourceLanguage).Replace("{targetLanguage}", targetLanguage);
+
+            _useSubtitleContext = true;
 
             _initialized = true;
         }
@@ -101,7 +105,7 @@ public class GoogleGeminiService : BaseLanguageService
         {
             try
             {
-                return await TranslateWithGeminiApi(message, linked.Token);
+                return await TranslateWithGeminiApi(message, _prompt, linked.Token);
             }
             catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.TooManyRequests)
             {
@@ -132,52 +136,230 @@ public class GoogleGeminiService : BaseLanguageService
         throw new TranslationException("Translation failed after maximum retry attempts.");
     }
 
-    private async Task<string> TranslateWithGeminiApi(string? message, CancellationToken cancellationToken)
+    /// <inheritdoc />
+    public override async Task<string> TranslateAsync(
+        string message,
+        string sourceLanguage,
+        string targetLanguage,
+        IEnumerable<string>? previousLines,
+        IEnumerable<string>? nextLines,
+        CancellationToken cancellationToken)
     {
-        var endpoint = $"{_endpoint}/models/{_model}:generateContent?key={_apiKey}";
+        await InitializeAsync(sourceLanguage, targetLanguage);
 
-        var request = new
+        if (!_useSubtitleContext || previousLines == null && nextLines == null)
         {
-            contents = new[]
+            return await TranslateAsync(message, sourceLanguage, targetLanguage, cancellationToken);
+        }
+
+        string contextualPrompt = _prompt ?? string.Empty;
+
+        if (previousLines != null && previousLines.Any())
+        {
+            contextualPrompt = contextualPrompt.Replace("{previousLines}", string.Join("\n", previousLines));
+        }
+        else
+        {
+            contextualPrompt = contextualPrompt.Replace("{previousLines}", string.Empty);
+        }
+
+        if (nextLines != null && nextLines.Any())
+        {
+            contextualPrompt = contextualPrompt.Replace("{nextLines}", string.Join("\n", nextLines));
+        }
+        else
+        {
+            contextualPrompt = contextualPrompt.Replace("{nextLines}", string.Empty);
+        }
+
+        // Use the contextual prompt temporarily
+        try
+        {
+            return await TranslateWithGeminiApi(message, contextualPrompt, cancellationToken);
+        }
+        catch (Exception)
+        {
+            // If contextual translation fails, fall back to regular translation
+            return await TranslateAsync(message, sourceLanguage, targetLanguage, cancellationToken);
+        }
+    }
+
+    private async Task<string> TranslateWithGeminiApi(string? message, string prompt, CancellationToken cancellationToken)
+    {
+        object request;
+        var translationModel = _model;
+        if (!_model.StartsWith("gemini-2.0") && !_model.StartsWith("gemini-1.5"))
+        {
+            var withThinking = _model.Contains("-with-thinking");
+            if (withThinking)
             {
-                new
+                // -with-thinking can have budget arbitery number, so we need to get it from the model optionally
+                var budget = _model.Split('-').Last();
+                int.TryParse(budget, out var budgetInt);
+
+                budgetInt = budgetInt > 0 ? budgetInt : 0;
+
+                // let's strip the -with-thinking from the model with it's budget
+                translationModel = _model.Replace($"-with-thinking-{budget}", "").Replace("-with-thinking", "");
+                if (budgetInt == 0)
                 {
-                    role = "user",
+                    request = new
+                    {
+                        system_instruction = new
+                        {
+                            parts = new[]
+                   {
+                        new
+                        {
+                            text = prompt
+                        }
+                    }
+                        },
+                        contents = new[]
+               {
+                    new
+                    {
+                        parts = new[]
+                        {
+                            new
+                            {
+                                text = message
+                            }
+                        }
+                    }
+                }
+                    };
+                }
+                else
+                {
+                    request = new
+                    {
+                        system_instruction = new
+                        {
+                            parts = new[]
+                  {
+                        new
+                        {
+                            text = prompt
+                        }
+                    }
+                        },
+                        contents = new[]
+              {
+                    new
+                    {
+                        parts = new[]
+                        {
+                            new
+                            {
+                                text = message
+                            }
+                        }
+                    }
+                },
+                        generationConfig = new
+                        {
+                            thinkingConfig = new
+                            {
+                                thinkingBudget = budgetInt
+                            }
+                        }
+                    };
+                }
+            }
+            else
+            {
+                request = new
+                {
+                    system_instruction = new
+                    {
+                        parts = new[]
+                   {
+                        new
+                        {
+                            text = prompt
+                        }
+                    }
+                    },
+                    contents = new[]
+               {
+                    new
+                    {
+                        parts = new[]
+                        {
+                            new
+                            {
+                                text = message
+                            }
+                        }
+                    }
+                },
+                    generationConfig = new
+                    {
+                        thinkingConfig = new
+                        {
+                            thinkingBudget = 0
+                        }
+                    }
+                };
+            }
+        }
+        else
+        {
+            request = new
+            {
+                system_instruction = new
+                {
                     parts = new[]
                     {
                         new
                         {
-                            text = _prompt
-                        },
-                        new
+                            text = prompt
+                        }
+                    }
+                },
+                contents = new[]
+                {
+                    new
+                    {
+                        parts = new[]
                         {
-                            text = message
+                            new
+                            {
+                                text = message
+                            }
                         }
                     }
                 }
-            }
-        };
+            };
+        }
+
+        var endpoint = $"{_endpoint}/models/{translationModel}:generateContent?key={_apiKey}";
 
         var content = new StringContent(
             JsonSerializer.Serialize(request),
             Encoding.UTF8,
             "application/json");
 
+        // let console log curl command
+        Console.WriteLine($"curl -X POST {endpoint} -H \"Content-Type: application/json\" -d '{JsonSerializer.Serialize(request)}'");
+
         var response = await _httpClient.PostAsync(endpoint, content, cancellationToken);
-        
+
         if (!response.IsSuccessStatusCode)
         {
             _logger.LogError("Response Status Code: {StatusCode}", response.StatusCode);
-            _logger.LogError("Response Content: {ResponseContent}", 
+            _logger.LogError("Response Content: {ResponseContent}",
                 await response.Content.ReadAsStringAsync(cancellationToken));
             throw new TranslationException("Translation using Gemini API failed.");
         }
 
         var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
+        // Console.WriteLine($"Response body: {responseBody}");
         var geminiResponse = JsonSerializer.Deserialize<GeminiResponse>(responseBody);
-        
+
         if (geminiResponse?.Candidates == null || geminiResponse.Candidates.Count == 0 ||
-            geminiResponse.Candidates[0].Content?.Parts == null || 
+            geminiResponse.Candidates[0].Content?.Parts == null ||
             geminiResponse.Candidates[0].Content?.Parts.Count == 0)
         {
             throw new TranslationException("Invalid or empty response from Gemini API.");

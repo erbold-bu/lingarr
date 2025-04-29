@@ -10,6 +10,7 @@ public class OpenAiService : BaseLanguageService
 {
     private string? _prompt;
     private ChatClient? _client;
+    private bool _useSubtitleContext;
     private bool _initialized;
     private readonly SemaphoreSlim _initLock = new(1, 1);
 
@@ -40,7 +41,8 @@ public class OpenAiService : BaseLanguageService
             var settings = await _settings.GetSettings([
                 SettingKeys.Translation.OpenAi.Model,
                 SettingKeys.Translation.OpenAi.ApiKey,
-                SettingKeys.Translation.AiPrompt
+                SettingKeys.Translation.AiPrompt,
+                SettingKeys.Translation.UseSubtitleContext
             ]);
 
             if (string.IsNullOrEmpty(settings[SettingKeys.Translation.OpenAi.Model]) ||
@@ -51,8 +53,10 @@ public class OpenAiService : BaseLanguageService
 
             _prompt = !string.IsNullOrEmpty(settings[SettingKeys.Translation.AiPrompt])
                 ? settings[SettingKeys.Translation.AiPrompt]
-                : "Translate from {sourceLanguage} to {targetLanguage}, preserving the tone and meaning without censoring the content. Adjust punctuation as needed to make the translation sound natural. Provide only the translated text as output, with no additional comments.";
+                : "Translate the input you received from {sourceLanguage} to {targetLanguage}, preserving the tone and meaning without censoring the content. Adjust punctuation as needed to make the translation sound natural. Provide only the translated text as output, with no additional comments. Do not send an empty response. Respect the previous and next lines as your translation context as well, but do not include previous and next lines for context in your translation for what you receive as a translation input.\n\nPrevious lines for context:\n{previousLines}\n\nNext lines for context:\n{nextLines}";
             _prompt = _prompt.Replace("{sourceLanguage}", sourceLanguage).Replace("{targetLanguage}", targetLanguage);
+            
+            _useSubtitleContext = true;
 
             _client = new ChatClient(
                 model: settings[SettingKeys.Translation.OpenAi.Model],
@@ -83,19 +87,77 @@ public class OpenAiService : BaseLanguageService
 
         try
         {
-            var messages = new List<ChatMessage>
-            {
-                new SystemChatMessage(_prompt),
-                new UserChatMessage(text)
-            };
-
-            ChatCompletion completion = await _client.CompleteChatAsync(messages, cancellationToken: cancellationToken);
-            return completion.Content[0].Text;
+            return await TranslateWithOpenAiAsync(text, _prompt, cancellationToken);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error occurred during OpenAI translation");
             throw new TranslationException("Failed to translate using OpenAI", ex);
+        }
+    }
+    
+    private async Task<string> TranslateWithOpenAiAsync(string text, string prompt, CancellationToken cancellationToken)
+    {
+        if (_client == null)
+        {
+            throw new InvalidOperationException("OpenAI service was not properly initialized.");
+        }
+
+        var messages = new List<ChatMessage>
+        {
+            new SystemChatMessage(prompt),
+            new UserChatMessage(text)
+        };
+
+        ChatCompletion completion = await _client.CompleteChatAsync(messages, cancellationToken: cancellationToken);
+        return completion.Content[0].Text;
+    }
+    
+    /// <inheritdoc />
+    public override async Task<string> TranslateAsync(
+        string text,
+        string sourceLanguage,
+        string targetLanguage,
+        IEnumerable<string>? previousLines,
+        IEnumerable<string>? nextLines,
+        CancellationToken cancellationToken)
+    {
+        await InitializeAsync(sourceLanguage, targetLanguage);
+        
+        if (!_useSubtitleContext || previousLines == null && nextLines == null)
+        {
+            return await TranslateAsync(text, sourceLanguage, targetLanguage, cancellationToken);
+        }
+        
+        string contextualPrompt = _prompt ?? string.Empty;
+        
+        if (previousLines != null && previousLines.Any())
+        {
+            contextualPrompt = contextualPrompt.Replace("{previousLines}", string.Join("\n", previousLines));
+        }
+        else
+        {
+            contextualPrompt = contextualPrompt.Replace("{previousLines}", string.Empty);
+        }
+        
+        if (nextLines != null && nextLines.Any())
+        {
+            contextualPrompt = contextualPrompt.Replace("{nextLines}", string.Join("\n", nextLines));
+        }
+        else
+        {
+            contextualPrompt = contextualPrompt.Replace("{nextLines}", string.Empty);
+        }
+        
+        try
+        {
+            // Use the contextual prompt directly
+            return await TranslateWithOpenAiAsync(text, contextualPrompt, cancellationToken);
+        }
+        catch (Exception)
+        {
+            // If contextual translation fails, fall back to regular translation
+            return await TranslateAsync(text, sourceLanguage, targetLanguage, cancellationToken);
         }
     }
 }

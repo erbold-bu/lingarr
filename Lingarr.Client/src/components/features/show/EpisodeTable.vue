@@ -40,6 +40,13 @@
                             </span>
                         </BadgeComponent>
                     </ContextMenu>
+                    
+                    <!-- Upload Button -->
+                    <button 
+                        class="border-accent bg-primary text-primary-content rounded-md border p-1 text-xs hover:brightness-150"
+                        @click.stop.prevent="openUploadDialog(episode)">
+                        <span class="px-1">+</span>
+                    </button>
                 </div>
                 <div class="col-span-1 px-1 py-2 md:col-span-1">
                     <ToggleButton
@@ -47,22 +54,53 @@
                         size="small"
                         @toggle:update="() => showStore.exclude(MEDIA_TYPE.EPISODE, episode.id)" />
                 </div>
+                
             </div>
         </div>
+        
+        <!-- Upload Subtitle Dialog -->
+        <UploadSubtitleDialog 
+            v-if="selectedEpisode"
+            :is-open="isUploadDialogOpen"
+            :media="selectedEpisode"
+            :media-type="MEDIA_TYPE.EPISODE"
+            @close="isUploadDialogOpen = false"
+            @uploaded="handleUploadSuccess"
+        />
     </div>
 </template>
 <script setup lang="ts">
+import { ref } from 'vue'
 import { IEpisode, ISubtitle, MEDIA_TYPE } from '@/ts'
 import BadgeComponent from '@/components/common/BadgeComponent.vue'
 import ContextMenu from '@/components/layout/ContextMenu.vue'
 import ToggleButton from '@/components/common/ToggleButton.vue'
 import { useShowStore } from '@/store/show'
+import UploadSubtitleDialog from '@/components/common/UploadSubtitleDialog.vue'
 
 const props = defineProps<{
     episodes: IEpisode[]
     subtitles: ISubtitle[]
 }>()
 const showStore = useShowStore()
+
+// For upload dialog
+const isUploadDialogOpen = ref(false)
+const selectedEpisode = ref<IEpisode | null>(null)
+
+function openUploadDialog(episode: IEpisode) {
+    console.log('Opening upload dialog for episode:', episode)
+    selectedEpisode.value = episode
+    setTimeout(() => {
+        isUploadDialogOpen.value = true
+    }, 100)
+}
+
+function handleUploadSuccess() {
+    isUploadDialogOpen.value = false
+    // Emit an event to refresh subtitles from parent
+    emit('refresh-subtitles')
+}
 
 const getSubtitle = (fileName: string | null) => {
     if (!fileName) return null
@@ -71,4 +109,6 @@ const getSubtitle = (fileName: string | null) => {
         .slice()
         .sort((a, b) => a.language.localeCompare(b.language))
 }
+
+const emit = defineEmits(['refresh-subtitles'])
 </script>

@@ -47,6 +47,8 @@ export interface ISettingService {
 
 export interface ISubtitleService {
     collect<T>(path: string): Promise<T>
+    downloadSubtitle(path: string): Promise<Blob>
+    uploadSubtitle<T>(file: File, mediaPath: string, language: string): Promise<T>
 }
 
 export interface IVersionService {

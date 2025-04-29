@@ -51,7 +51,8 @@
             <EpisodeTable
                 v-if="expandedSeason?.id === season.id"
                 :subtitles="subtitles"
-                :episodes="season.episodes" />
+                :episodes="season.episodes"
+                @refresh-subtitles="collectSubtitles" />
         </div>
     </div>
 </template>

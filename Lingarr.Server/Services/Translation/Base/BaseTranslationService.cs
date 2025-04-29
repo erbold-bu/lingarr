@@ -23,5 +23,14 @@ public abstract class BaseTranslationService : ITranslationService
         CancellationToken cancellationToken);
 
     /// <inheritdoc />
+    public abstract Task<string> TranslateAsync(
+        string text,
+        string sourceLanguage,
+        string targetLanguage,
+        IEnumerable<string>? previousLines,
+        IEnumerable<string>? nextLines,
+        CancellationToken cancellationToken);
+
+    /// <inheritdoc />
     public abstract Task<List<SourceLanguage>> GetLanguages();
 }

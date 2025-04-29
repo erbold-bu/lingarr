@@ -93,35 +93,56 @@ public class LibreService : BaseLanguageService
     public override async Task<string> TranslateAsync(
         string text,
         string sourceLanguage,
-        string targetLanguage, 
+        string targetLanguage,
         CancellationToken cancellationToken)
     {
         await InitializeAsync();
-
-        if (string.IsNullOrEmpty(_apiUrl))
+        
+        if (_httpClient == null)
         {
-            throw new InvalidOperationException("LibreTranslate URL is not configured.");
+            throw new TranslationException("LibreTranslate client was not properly initialized.");
         }
 
-        var content = new StringContent(JsonSerializer.Serialize(new
+        try
         {
-            q = text,
-            source = sourceLanguage,
-            target = targetLanguage,
-            format = "text"
-        }), Encoding.UTF8, "application/json");
-        
-        content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
-        
-        var response = await _httpClient.PostAsync($"{_apiUrl}/translate", content, cancellationToken);
-        if (!response.IsSuccessStatusCode)
+            var content = new StringContent(JsonSerializer.Serialize(new
+            {
+                q = text,
+                source = sourceLanguage,
+                target = targetLanguage,
+                format = "text"
+            }), Encoding.UTF8, "application/json");
+            
+            content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+            
+            var response = await _httpClient.PostAsync($"{_apiUrl}/translate", content, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogError("Response Status Code: {StatusCode}", response.StatusCode);
+                _logger.LogError("Response Content: {ResponseContent}", await response.Content.ReadAsStringAsync(cancellationToken));
+                throw new TranslationException("Translation using LibreTranslate failed.");
+            }
+            
+            var result = await response.Content.ReadFromJsonAsync<TranslationResponse>();
+            return result?.TranslatedText ?? string.Empty;
+        }
+        catch (Exception ex)
         {
-            _logger.LogError("Response Status Code: {StatusCode}", response.StatusCode);
-            _logger.LogError("Response Content: {ResponseContent}", await response.Content.ReadAsStringAsync(cancellationToken));
+            _logger.LogError(ex, "LibreTranslate translation failed");
             throw new TranslationException("Translation using LibreTranslate failed.");
         }
-        
-        var result = await response.Content.ReadFromJsonAsync<TranslationResponse>();
-        return result?.TranslatedText ?? string.Empty;
+    }
+    
+    /// <inheritdoc />
+    public override async Task<string> TranslateAsync(
+        string text,
+        string sourceLanguage,
+        string targetLanguage,
+        IEnumerable<string>? previousLines,
+        IEnumerable<string>? nextLines,
+        CancellationToken cancellationToken)
+    {
+        // LibreTranslate API doesn't support context for translations, so we just call the regular method
+        return await TranslateAsync(text, sourceLanguage, targetLanguage, cancellationToken);
     }
 }

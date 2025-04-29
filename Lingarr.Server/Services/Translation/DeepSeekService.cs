@@ -27,6 +27,17 @@ public class DeepSeekService : BaseLanguageService
         _httpClient = httpClient;
     }
 
+    /// <inheritdoc />
+    public override async Task<string> TranslateAsync(
+        string text,
+        string sourceLanguage,
+        string targetLanguage,
+        CancellationToken cancellationToken)
+    {
+        return await TranslateAsync(text, sourceLanguage, targetLanguage, null, null, cancellationToken);
+    }
+
+
     /// <summary>
     /// Initializes the translation service with necessary configurations and credentials.
     /// This method is thread-safe and ensures one-time initialization of service dependencies.
@@ -62,14 +73,14 @@ public class DeepSeekService : BaseLanguageService
             }
 
             _model = settings[SettingKeys.Translation.DeepSeek.Model];
-            
+
             _httpClient.DefaultRequestHeaders.Accept.Clear();
             _httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
             _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
 
             _prompt = !string.IsNullOrEmpty(settings[SettingKeys.Translation.AiPrompt])
                 ? settings[SettingKeys.Translation.AiPrompt]
-                : "Translate from {sourceLanguage} to {targetLanguage}, preserving the tone and meaning without censoring the content. Adjust punctuation as needed to make the translation sound natural. Provide only the translated text as output, with no additional comments.";
+                : "Translate the input you received from {sourceLanguage} to {targetLanguage}, preserving the tone and meaning without censoring the content. Adjust punctuation as needed to make the translation sound natural. Provide only the translated text as output, with no additional comments. Do not send an empty response. Respect the previous and next lines as your translation context as well, but do not include previous and next lines for context in your translation for what you receive as a translation input.\n\nPrevious lines for context:\n{previousLines}\n\nNext lines for context:\n{nextLines}";
             _prompt = _prompt.Replace("{sourceLanguage}", sourceLanguage).Replace("{targetLanguage}", targetLanguage);
 
             _initialized = true;
@@ -80,22 +91,6 @@ public class DeepSeekService : BaseLanguageService
         }
     }
 
-    /// <inheritdoc />
-    public override async Task<string> TranslateAsync(
-        string text,
-        string sourceLanguage,
-        string targetLanguage,
-        CancellationToken cancellationToken)
-    {
-        await InitializeAsync(sourceLanguage, targetLanguage);
-
-        if (string.IsNullOrEmpty(_model) || string.IsNullOrEmpty(_prompt))
-        {
-            throw new InvalidOperationException("DeepSeek service was not properly initialized.");
-        }
-
-        return await TranslateWithChatApi(text, cancellationToken);
-    }
 
     private async Task<string> TranslateWithChatApi(string? text, CancellationToken cancellationToken)
     {
@@ -119,7 +114,7 @@ public class DeepSeekService : BaseLanguageService
         );
 
         var response = await _httpClient.PostAsync(_endpoint, content, cancellationToken);
-        
+
         if (!response.IsSuccessStatusCode)
         {
             _logger.LogError("Response Status Code: {StatusCode}", response.StatusCode);
@@ -129,12 +124,17 @@ public class DeepSeekService : BaseLanguageService
 
         var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
         var chatResponse = JsonSerializer.Deserialize<DeepSeekChatResponse>(responseBody);
-        
+
         if (chatResponse?.Choices == null || chatResponse.Choices.Count == 0)
         {
             throw new TranslationException("Invalid or empty response from DeepSeek API.");
         }
 
         return chatResponse.Choices[0].Message.Content.Trim();
+    }
+
+    public override Task<string> TranslateAsync(string text, string sourceLanguage, string targetLanguage, IEnumerable<string>? previousLines, IEnumerable<string>? nextLines, CancellationToken cancellationToken)
+    {
+        throw new NotImplementedException();
     }
 }
